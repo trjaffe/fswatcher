@@ -138,7 +138,6 @@ docker run -d \
     -e AWS_REGION="$AWS_REGION" \
     -e FILE_LOGGING="$FILE_LOGGING" \
     -e CHECK_S3="$CHECK_S3" \
-
     -e BOTO3_LOGGING="$BOTO3_LOGGING" \
     -e TEST_IAM_POLICY="$TEST_IAM_POLICY" \
     -v /etc/passwd:/etc/passwd \

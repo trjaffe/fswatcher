@@ -132,11 +132,6 @@ class FileSystemHandler(FileSystemEventHandler):
             log.info("Performing Push/Remove Test Run")
             self._test_iam_policy()
 
-        log.info(f"Watching for file events in: {config.path}")
-        if config.backtrack:
-            log.info("Backtracking enabled")
-            self._backtrack(config.path, self._parse_datetime(config.backtrack_date))
-
     def on_any_event(self, event: FileSystemEvent) -> None:
         """
         Overloaded Function to deal with any event
@@ -627,7 +622,7 @@ class FileSystemHandler(FileSystemEventHandler):
     # Perform IAM Policy Configuration Test
     def _test_iam_policy(self):
         # Create a file to test
-        test_filename="fswatcher_test_file.txt"
+        test_filename = "fswatcher_test_file.txt"
         test_file = os.path.join(self.path, test_filename)
         test_event = FileMovedEvent(test_file, test_file)
         file_system_event = FileSystemHandlerEvent(
