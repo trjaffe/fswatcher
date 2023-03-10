@@ -1,0 +1,10 @@
+fswatcher.log
+test_directory/*
+fswatcher.service
+venv/
+```
+*.egg-info/
+```
+build/  
+__pycache__/
+```
