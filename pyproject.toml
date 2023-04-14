@@ -1,0 +1,25 @@
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "fswatcher"
+version = "0.1.0"
+description = "AWS File System Watcher"
+authors = ["Damian Barrous-Dume <dbarrous@navteca.com>"]
+packages = [
+    { include = "fswatcher" },
+]
+
+[tool.poetry.dependencies]
+python = "^3.8.1"
+watchdog = { git = "https://github.com/dbarrous/watchdog.git" }
+boto3 = "1.26.35"
+slack_sdk = "3.19.5"
+sdc_aws_utils = { git = "https://github.com/HERMES-SOC/sdc_aws_utils.git" }
+
+[tool.poetry.dev-dependencies]
+# Add development dependencies as needed
+
+[tool.poetry.scripts]
+fswatcher = "fswatcher:__main__"

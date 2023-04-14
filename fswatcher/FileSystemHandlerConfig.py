@@ -3,6 +3,7 @@ File System Handler Configuration Module
 """
 
 from argparse import ArgumentParser
+
 from fswatcher import log
 
 
@@ -22,7 +23,6 @@ class FileSystemHandlerConfig:
         allow_delete: bool = False,
         slack_token: str = "",
         slack_channel: str = "",
-        slack_message: str = "",
         backtrack: bool = False,
         backtrack_date: str = "",
     ) -> None:
@@ -39,14 +39,13 @@ class FileSystemHandlerConfig:
         self.allow_delete = allow_delete
         self.slack_token = slack_token
         self.slack_channel = slack_channel
-        self.slack_message = slack_message
         self.backtrack = backtrack
         self.backtrack_date = backtrack_date
 
 
 def create_argparse() -> ArgumentParser:
     """
-    Function to initialize the Argument Parser and with the arguments to be parsed and return the Arguments Parser
+    Function to initialize the Argument Parser with the arguments to be parsed and return the Arguments Parser
 
     :return: Argument Parser
     :rtype: argparse.ArgumentParser
@@ -74,7 +73,7 @@ def create_argparse() -> ArgumentParser:
     # Add Argument to parse the concurrency limit
     parser.add_argument(
         "-c",
-        "--concurrency_limit_limit",
+        "--concurrency_limit",
         type=int,
         help="Concurrency Limit for the File System Watcher",
     )
@@ -120,82 +119,61 @@ def create_argparse() -> ArgumentParser:
     return parser
 
 
-def get_args(args: ArgumentParser) -> dict:
+def parse_args(parser: ArgumentParser) -> dict:
     """
     Function to get the parsed arguments and return them as a dictionary
 
-    :param args: Arguments Parser
-    :type args: argparse.ArgumentParser
+    :param parser: Arguments Parser
+    :type parser: argparse.ArgumentParser
     :return: Dictionary of arguments
     :rtype: dict
     """
     # Parse the arguments
-    args = args.parse_args()
+    args = parser.parse_args()
 
     # Initialize the arguments dictionary
-    args_dict = {}
-
-    # Add the arguments to the dictionary
-    args_dict["SDC_AWS_WATCH_PATH"] = args.directory
-    args_dict["SDC_AWS_S3_BUCKET"] = args.bucket_name
-    args_dict["SDC_AWS_TIMESTREAM_DB"] = args.timestream_db
-    args_dict["SDC_AWS_TIMESTREAM_TABLE"] = args.timestream_table
-    args_dict["SDC_AWS_PROFILE"] = args.profile
-    args_dict["SDC_AWS_CONCURRENCY_LIMIT"] = args.concurrency_limit_limit
-    args_dict["SDC_AWS_ALLOW_DELETE"] = args.allow_delete
-    args_dict["SDC_AWS_SLACK_TOKEN"] = args.slack_token
-    args_dict["SDC_AWS_SLACK_CHANNEL"] = args.slack_channel
-    args_dict["SDC_AWS_BACKTRACK"] = args.backtrack
-    args_dict["SDC_AWS_BACKTRACK_DATE"] = args.backtrack_date
+    args_dict = {
+        "path": args.directory,
+        "bucket_name": args.bucket_name,
+        "timestream_db": args.timestream_db,
+        "timestream_table": args.timestream_table,
+        "profile": args.profile,
+        "concurrency_limit": args.concurrency_limit,
+        "allow_delete": args.allow_delete,
+        "slack_token": args.slack_token,
+        "slack_channel": args.slack_channel,
+        "backtrack": args.backtrack,
+        "backtrack_date": args.backtrack_date,
+    }
 
     # Return the arguments dictionary
     return args_dict
 
 
-def validate_config_dict(config: dict) -> bool:
+def validate_config(config: dict) -> bool:
     """
     Function to validate the configuration and return True if the configuration is valid, False otherwise
 
-    :param args: Arguments dictionary
-    :type args: dict
-    :return: True if the arguments dictionary is valid, False otherwise
+    :param config: Configuration dictionary
+    :type config: dict
+    :return: True if the configuration dictionary is valid, False otherwise
     :rtype: bool
     """
-
-    # Check if the directory path and bucket name are provided
-    if config.get("SDC_AWS_WATCH_PATH") and config.get("SDC_AWS_S3_BUCKET"):
-        return True
-    else:
-        return False
+    return all(config.get(key) for key in ["path", "bucket_name"])
 
 
 def get_config() -> FileSystemHandlerConfig:
     """
-    Function to generate the FileSystemHandlerConfig object from the arguments and environment variables. If the arguments are valid, the FileSystemHandlerConfig object is generated from the arguments. If the arguments are not valid, the FileSystemHandlerConfig object is generated from the environment variables. If both are supplied, the arguments take precedence. If neither are supplied or are invalid, the program exits.
+    Function to generate the FileSystemHandlerConfig object from the arguments. If the arguments are valid, the FileSystemHandlerConfig object is generated from the arguments. If the arguments are not valid, the program exits.
 
     :return: FileSystemHandlerConfig object
     :rtype: FileSystemHandlerConfig
     """
+    # Get the arguments
+    args = parse_args(create_argparse())
 
-    # Get the arguments and environment variables
-    args = get_args(create_argparse())
-
-    if validate_config_dict(args):
-        config = FileSystemHandlerConfig(
-            path=args.get("SDC_AWS_WATCH_PATH"),
-            bucket_name=args.get("SDC_AWS_S3_BUCKET"),
-            timestream_db=args.get("SDC_AWS_TIMESTREAM_DB"),
-            timestream_table=args.get("SDC_AWS_TIMESTREAM_TABLE"),
-            profile=args.get("SDC_AWS_PROFILE"),
-            concurrency_limit=args.get("SDC_AWS_CONCURRENCY_LIMIT"),
-            allow_delete=args.get("SDC_AWS_ALLOW_DELETE"),
-            slack_token=args.get("SDC_AWS_SLACK_TOKEN"),
-            slack_channel=args.get("SDC_AWS_SLACK_CHANNEL"),
-            backtrack=args.get("SDC_AWS_BACKTRACK"),
-            backtrack_date=args.get("SDC_AWS_BACKTRACK_DATE"),
-        )
-
-    # If neither are valid, exit the program
+    if validate_config(args):
+        config = FileSystemHandlerConfig(**args)
     else:
         log.error(
             "Invalid configuration, please provide a directory path and S3 bucket name"

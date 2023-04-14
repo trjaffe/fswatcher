@@ -106,6 +106,11 @@ if [ "$FILE_LOGGING" = true ]; then
     FILE_LOGGING=true
 fi
 
+# If USE_FALLBACK is true, then add it to the environment variables else make it empty
+if [ "$USE_FALLBACK" = true ]; then
+    USE_FALLBACK=true
+fi
+
 # Print all the environment variables
 echo "Passed Arguments:"
 echo "SDC_AWS_S3_BUCKET: $SDC_AWS_S3_BUCKET"
@@ -121,7 +126,7 @@ echo "BOTO3_LOGGING: $BOTO3_LOGGING"
 echo "TEST_IAM_POLICY: $TEST_IAM_POLICY"
 echo "BACKTRACK: $BACKTRACK"
 echo "BACKTRACK_DATE: $BACKTRACK_DATE"
-
+echo "USE_FALLBACK: $USE_FALLBACK"
 
 # Run the docker container in detached mode
 docker run -d \
@@ -140,6 +145,7 @@ docker run -d \
     -e CHECK_S3="$CHECK_S3" \
     -e BOTO3_LOGGING="$BOTO3_LOGGING" \
     -e TEST_IAM_POLICY="$TEST_IAM_POLICY" \
+    -e USE_FALLBACK="$USE_FALLBACK" \
     -v /etc/passwd:/etc/passwd \
     -v $WATCH_DIR:/watch \
     -v ${HOME}/.aws/credentials:/root/.aws/credentials:ro \

@@ -7,6 +7,8 @@ import os
 import time
 from datetime import datetime
 from urllib import parse
+from pathlib import Path
+import sqlite3
 import boto3
 import botocore
 from boto3.s3.transfer import TransferConfig, S3Transfer
@@ -19,6 +21,7 @@ from watchdog.events import (
     FileClosedEvent,
     FileSystemEventHandler,
     FileMovedEvent,
+    FileDeletedEvent,
 )
 from typing import List
 from fswatcher import log
@@ -60,12 +63,12 @@ class FileSystemHandler(FileSystemEventHandler):
             botocore_config = botocore.config.Config(
                 max_pool_connections=self.concurrency_limit
             )
-            s3client = self.boto3_session.client("s3", config=botocore_config)
+            self.s3_client = self.boto3_session.client("s3", config=botocore_config)
             transfer_config = TransferConfig(
                 use_threads=True,
                 max_concurrency=self.concurrency_limit,
             )
-            self.s3t = S3Transfer(s3client, transfer_config)
+            self.s3t = S3Transfer(self.s3_client, transfer_config)
 
         except botocore.exceptions.ClientError as e:
             # If a client error is thrown, then check that it was a 404 error.
@@ -351,7 +354,7 @@ class FileSystemHandler(FileSystemEventHandler):
                     "tags": tags,
                 }
             )
-            print(self.dead_letter_queue)
+            log.info(self.dead_letter_queue)
 
         except botocore.exceptions.ClientError as e:
             log.error(
@@ -366,39 +369,20 @@ class FileSystemHandler(FileSystemEventHandler):
 
     def _delete_from_s3_bucket(self, bucket_name, file_key):
         """
-        Function to Delete a file from an S3 Bucket
+        Function to delete a file from an S3 bucket
         """
         log.debug(f"Object ({file_key}) - Deleting file from S3 Bucket ({bucket_name})")
-        # If bucket name includes directories remove them from bucket_name and append to the file_key
-        if "/" in bucket_name:
-            bucket_name, folder = bucket_name.split("/", 1)
-            if folder != "" and folder[-1] != "/":
-                folder = f"{folder}/"
-            delete_file_key = f"{folder}{file_key}"
-        else:
-            delete_file_key = file_key
-            folder = ""
-        try:
-            # Delete from S3 Bucket
-            self.s3t.download_file(
-                bucket_name,
-                delete_file_key,
-            )
-            if folder != "" and folder[0] != "/":
-                folder = f"/{folder}"
-            log.info(
-                f"Object ({file_key}) - Successfully Deleted from S3 Bucket ({bucket_name}{folder})"
-            )
 
+        try:
+            if self.allow_delete:
+                self.s3_client.delete_object(Bucket=bucket_name, Key=file_key)
+
+                log.info(
+                    f"Object ({file_key}) - Successfully deleted from S3 Bucket ({bucket_name})"
+                )
         except botocore.exceptions.ClientError as e:
             log.error(
                 {"status": "ERROR", "message": f"Error deleting from S3 Bucket: {e}"}
-            )
-            self._send_slack_notification(
-                slack_client=self.slack_client,
-                slack_channel=self.slack_channel,
-                slack_message=f"FSWatcher: Error deleting file from {bucket_name} - ({file_key}) :file_folder:",
-                alert_type="error",
             )
 
     @staticmethod
@@ -578,10 +562,15 @@ class FileSystemHandler(FileSystemEventHandler):
                 )
 
     # Go through the list of files and create a FileMovedEvent then dispatch it
-    def _dispatch_events(self, files):
+    def _dispatch_events(self, files, deleted_files=None):
         for file in files:
             event = FileMovedEvent(file, file)
             self.dispatch(event)
+
+        if deleted_files:
+            for file in deleted_files:
+                event = FileDeletedEvent(file)
+                self.dispatch(event)
 
     # Backtrack the directory tree
     def backtrack(self, path, date_filter=None):
@@ -718,3 +707,132 @@ class FileSystemHandler(FileSystemEventHandler):
             log.warning(
                 "Since allow_delete is set to False, the test file will not be deleted from S3, please delete it manually"
             )
+
+    def init_db(self):
+        conn = sqlite3.connect("fswatcher.db")
+        return conn
+
+    def update_files_info(self, conn, cur, file_info):
+        cur.execute(
+            "REPLACE INTO files (file_path, modified_time) VALUES (?, ?)",
+            (file_info["file_path"], file_info["modified_time"]),
+        )
+        conn.commit()
+
+    def delete_file_info(self, conn, cur, file_path):
+        cur.execute("DELETE FROM files WHERE file_path=?", (file_path,))
+        conn.commit()
+
+    def get_files_info(self, cur):
+        cur.execute("SELECT file_path, modified_time FROM files")
+        return {row[0]: row[1] for row in cur.fetchall()}
+
+    def check_for_changes(self, conn, cur, current_files_info):
+        new_files = []
+        deleted_files = []
+        previous_files_info = self.get_files_info(cur)
+
+        for file, mtime in current_files_info.items():
+            if file not in previous_files_info or mtime > previous_files_info[file]:
+                new_files.append(file)
+                self.update_files_info(
+                    conn, cur, {"file_path": file, "modified_time": mtime}
+                )
+
+        for file in previous_files_info:
+            if file not in current_files_info:
+                deleted_files.append(file)
+                self.delete_file_info(conn, cur, file)
+
+        conn.commit()  # Commit the changes after all operations are complete
+        return new_files, deleted_files
+
+    def process_files(self, conn, cur, all_files):
+        current_files_info = {file_path: mtime for file_path, mtime in all_files}
+        new_files, deleted_files = self.check_for_changes(conn, cur, current_files_info)
+        return new_files, deleted_files
+
+    def check_path_exists(self, path):
+        if not Path(path).exists():
+            log.info(f"Path {path} does not exist")
+            return False
+        return True
+
+    def walk_directory(self, path, excluded_files=None, excluded_exts=None):
+        all_files = []
+        for root, _, files in os.walk(path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                if (excluded_files and file_path in excluded_files) or (
+                    excluded_exts and os.path.splitext(file)[1] in excluded_exts
+                ):
+                    continue
+                try:
+                    file_mtime = os.path.getmtime(file_path)
+                    all_files.append((file_path, file_mtime))
+                except FileNotFoundError:
+                    log.info(f"File {file_path} not found")
+
+        return all_files
+
+    def fallback_directory_watcher(self):
+        path = "/watch"
+        check_interval = 5
+        # Initialize excluded_files and excluded_exts as empty lists
+        s3_keys = []
+        excluded_exts = []
+        if self.check_with_s3:
+            log.info("Checking S3 bucket for existing files...")
+            s3_keys = self._get_s3_keys(self.bucket_name)
+
+        log.info("Starting directory watcher...")
+        if not self.check_path_exists(path):
+            log.info("Path does not exist, exiting...")
+            return
+        else:
+            log.info(f"Monitoring path: {path}")
+
+        conn = self.init_db()
+        cur = conn.cursor()
+
+        # Create the table if it doesn't exist
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS files (
+                        file_path TEXT PRIMARY KEY,
+                        modified_time REAL)"""
+        )
+        conn.commit()
+
+        while True:
+            time.sleep(
+                check_interval
+            )  # Wait for 60 seconds before checking for new files again
+            start = time.time()
+            # Get list of all files in directory
+            all_files = self.walk_directory(
+                path, excluded_files=s3_keys, excluded_exts=excluded_exts
+            )
+            end = time.time()
+            log.info(f"Time taken to walk directory: {end - start} seconds")
+            if self.check_with_s3:
+                log.info(f"Total files found not on s3: {len(all_files)}")
+            else:
+                log.info(f"Total files found: {len(all_files)}")
+
+            start = time.time()
+            log.info("Processing files...")
+            # Check for new, updated, and deleted files
+            new_files, deleted_files = self.process_files(conn, cur, all_files)
+            end = time.time()
+            log.info(f"Time taken to process files: {end - start} seconds")
+            log.info(f"New files: {len(new_files)}")
+            log.info(f"Deleted files: {len(deleted_files)}")
+            # Size in megabytes of db
+            log.info(f"DB size: {os.path.getsize('fswatcher.db') / 1000000} MB")
+
+            start = time.time()
+            # Dispatch events
+            log.info("Dispatching events...")
+            self._dispatch_events(new_files, deleted_files)
+            end = time.time()
+            log.info(f"Time taken to dispatch events: {end - start} seconds")
