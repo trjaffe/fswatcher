@@ -371,6 +371,13 @@ class FileSystemHandler(FileSystemEventHandler):
         """
         Function to delete a file from an S3 bucket
         """
+        # If bucket name includes directories remove them from bucket_name and append to the file_key
+        if "/" in bucket_name:
+            bucket_name, folder = bucket_name.split("/", 1)
+            if folder != "" and folder[-1] != "/":
+                folder = f"{folder}/"
+            file_key = f"{folder}{file_key}"
+
         log.debug(f"Object ({file_key}) - Deleting file from S3 Bucket ({bucket_name})")
 
         try:
@@ -747,8 +754,13 @@ class FileSystemHandler(FileSystemEventHandler):
         conn.commit()  # Commit the changes after all operations are complete
         return new_files, deleted_files
 
-    def process_files(self, conn, cur, all_files):
-        current_files_info = {file_path: mtime for file_path, mtime in all_files}
+    def process_files(self, conn, cur, all_files, s3=False):
+        if s3:
+            # Compatible modification time for S3 in float
+            datetime_now = datetime.now().timestamp()
+            current_files_info = {file_path: datetime_now for file_path in all_files}
+        else:
+            current_files_info = {file_path: mtime for file_path, mtime in all_files}
         new_files, deleted_files = self.check_for_changes(conn, cur, current_files_info)
         return new_files, deleted_files
 
@@ -778,12 +790,27 @@ class FileSystemHandler(FileSystemEventHandler):
     def fallback_directory_watcher(self):
         path = "/watch"
         check_interval = 5
+
+        # Create the table if it doesn't exist
+        conn = self.init_db()
+        cur = conn.cursor()
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS files (
+                        file_path TEXT PRIMARY KEY,
+                        modified_time REAL)"""
+        )
+        conn.commit()
+
         # Initialize excluded_files and excluded_exts as empty lists
-        s3_keys = []
+        excluded_files = []
         excluded_exts = []
         if self.check_with_s3:
             log.info("Checking S3 bucket for existing files...")
             s3_keys = self._get_s3_keys(self.bucket_name)
+            log.info(
+                f"Found {len(s3_keys)} files in S3 bucket. Adding to db of existing files..."
+            )
+            self.process_files(conn, cur, s3_keys, True)
 
         log.info("Starting directory watcher...")
         if not self.check_path_exists(path):
@@ -792,17 +819,6 @@ class FileSystemHandler(FileSystemEventHandler):
         else:
             log.info(f"Monitoring path: {path}")
 
-        conn = self.init_db()
-        cur = conn.cursor()
-
-        # Create the table if it doesn't exist
-        cur.execute(
-            """CREATE TABLE IF NOT EXISTS files (
-                        file_path TEXT PRIMARY KEY,
-                        modified_time REAL)"""
-        )
-        conn.commit()
-
         while True:
             time.sleep(
                 check_interval
@@ -810,14 +826,10 @@ class FileSystemHandler(FileSystemEventHandler):
             start = time.time()
             # Get list of all files in directory
             all_files = self.walk_directory(
-                path, excluded_files=s3_keys, excluded_exts=excluded_exts
+                path, excluded_files=excluded_files, excluded_exts=excluded_exts
             )
             end = time.time()
             log.info(f"Time taken to walk directory: {end - start} seconds")
-            if self.check_with_s3:
-                log.info(f"Total files found not on s3: {len(all_files)}")
-            else:
-                log.info(f"Total files found: {len(all_files)}")
 
             start = time.time()
             log.info("Processing files...")
