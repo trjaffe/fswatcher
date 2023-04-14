@@ -1,6 +1,6 @@
 # FSWatcher Utility
 
-This is a filewatcher system that can be configured to watch a directory for new files and then upload them to an S3 bucket. It also tags the objects with the creation and modified time, to keep that information on the cloud as well. This is useful for keeping a backup of files on the cloud, or for keeping a copy of files that are being created on a local machine. You also can configure the system to log the `CREATE`, `UPDATE`, `PUT` and `DELETE` events to a Timestream table, so you can keep track of the files that are being created, modified or deleted in near realtime. This will allow for extra visibility of the AWS SDC Pipeline from the SDC External Server to the S3 Bucket.
+This is a filewatcher system that can be configured to watch a directory for new files and then upload them to an [AWS S3 bucket](https://aws.amazon.com/s3/). It also tags the objects with the creation and modified time, to keep that information on the cloud as well. This is useful for keeping a backup of files on the cloud, or for keeping a copy of files that are being created on a local machine. You also can configure the system to log the `CREATE`, `UPDATE`, `PUT` and `DELETE` events to a Timestream table, so you can keep track of the files that are being created, modified or deleted in near realtime. This will allow for extra visibility of the AWS SDC Pipeline from the SDC External Server to the S3 Bucket.
 
 ## Table of Contents
 - [FSWatcher](#fswatcher)
