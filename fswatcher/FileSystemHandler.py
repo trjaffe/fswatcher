@@ -42,6 +42,10 @@ class FileSystemHandler(FileSystemEventHandler):
         """
         Overloaded Constructor
         """
+
+        # Initialize the config
+        self.config = config
+
         # Initialize the allow S3 delete flag
         self.allow_delete = config.allow_delete
 
@@ -325,6 +329,7 @@ class FileSystemHandler(FileSystemEventHandler):
 
         try:
             # Upload to S3 Bucket
+            self._refresh_boto_session()
             self.s3t.upload_file(
                 src_path,
                 bucket_name,
@@ -382,6 +387,7 @@ class FileSystemHandler(FileSystemEventHandler):
 
         try:
             if self.allow_delete:
+                self._refresh_boto_session()
                 self.s3_client.delete_object(Bucket=bucket_name, Key=file_key)
 
                 log.info(
@@ -560,6 +566,7 @@ class FileSystemHandler(FileSystemEventHandler):
                     file_key,
                     tags=self.tags,
                 )
+                self._refresh_boto_session()
                 self._log(
                     boto3_session=self.boto3_session,
                     action_type="PUT",
@@ -587,6 +594,7 @@ class FileSystemHandler(FileSystemEventHandler):
     def _get_s3_keys(self, bucket_name):
         keys = []
         start_time = time.time()
+        self._refresh_boto_session()
         s3 = self.boto3_session.client("s3")
         paginator = s3.get_paginator("list_objects_v2")
         # If bucket name includes directories remove them from bucket_name and append to the file_key
@@ -660,6 +668,7 @@ class FileSystemHandler(FileSystemEventHandler):
         log.info(f"File Key: {file_key}")
 
         # Check if the file exists in S3 using s3 client
+        self._refresh_boto_session()
         s3 = self.boto3_session.client("s3")
 
         try:
@@ -829,22 +838,52 @@ class FileSystemHandler(FileSystemEventHandler):
                 path, excluded_files=excluded_files, excluded_exts=excluded_exts
             )
             end = time.time()
-            log.info(f"Time taken to walk directory: {end - start} seconds")
+            # log.info(f"Time taken to walk directory: {end - start} seconds")
 
             start = time.time()
-            log.info("Processing files...")
+            # log.info("Processing files...")
             # Check for new, updated, and deleted files
             new_files, deleted_files = self.process_files(conn, cur, all_files)
             end = time.time()
-            log.info(f"Time taken to process files: {end - start} seconds")
-            log.info(f"New files: {len(new_files)}")
-            log.info(f"Deleted files: {len(deleted_files)}")
+            # log.info(f"Time taken to process files: {end - start} seconds")
+            # log.info(f"New files: {len(new_files)}")
+            # log.info(f"Deleted files: {len(deleted_files)}")
             # Size in megabytes of db
-            log.info(f"DB size: {os.path.getsize('fswatcher.db') / 1000000} MB")
+            # log.info(f"DB size: {os.path.getsize('fswatcher.db') / 1000000} MB")
 
             start = time.time()
             # Dispatch events
-            log.info("Dispatching events...")
+            # log.info("Dispatching events...")
             self._dispatch_events(new_files, deleted_files)
             end = time.time()
-            log.info(f"Time taken to dispatch events: {end - start} seconds")
+            # log.info(f"Time taken to dispatch events: {end - start} seconds")
+
+    def _refresh_boto_session(self):
+        config = self.config
+        try:
+            self.boto3_session = (
+                boto3.session.Session(
+                    profile_name=config.profile, region_name=os.getenv("AWS_REGION")
+                )
+                if config.profile != ""
+                else boto3.session.Session(region_name=os.getenv("AWS_REGION"))
+            )
+            botocore_config = botocore.config.Config(
+                max_pool_connections=self.concurrency_limit
+            )
+            self.s3_client = self.boto3_session.client("s3", config=botocore_config)
+            transfer_config = TransferConfig(
+                use_threads=True,
+                max_concurrency=self.concurrency_limit,
+            )
+            self.s3t = S3Transfer(self.s3_client, transfer_config)
+        except botocore.exceptions.ClientError as e:
+            error_code = int(e.response["Error"]["Code"])
+            if error_code == 404:
+                log.error(
+                    {
+                        "status": "ERROR",
+                        "message": f"Bucket ({config.bucket_name}) does not exist",
+                    }
+                )
+                sys.exit(1)
