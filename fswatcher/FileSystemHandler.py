@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 from urllib import parse
 from pathlib import Path
-import sqlite3
+import subprocess
 import boto3
 import botocore
 from boto3.s3.transfer import TransferConfig, S3Transfer
@@ -51,6 +51,9 @@ class FileSystemHandler(FileSystemEventHandler):
 
         # Initialize the concurrency_limit (Max number of concurrent S3 Uploads)
         self.concurrency_limit = config.concurrency_limit
+
+        # Time since last refresh
+        self.last_refresh_time = time.time()
 
         # Check if bucket name is and accessible using boto
         try:
@@ -329,7 +332,9 @@ class FileSystemHandler(FileSystemEventHandler):
 
         try:
             # Upload to S3 Bucket
-            self._refresh_boto_session()
+            # If time since self.last_refresh is greater than 15 minutes refresh the boto session
+            if time.time() - self.last_refresh_time >= 900:  # 900 seconds = 15 minutes
+                self._refresh_boto_session()
             self.s3t.upload_file(
                 src_path,
                 bucket_name,
@@ -362,6 +367,7 @@ class FileSystemHandler(FileSystemEventHandler):
             log.info(self.dead_letter_queue)
 
         except botocore.exceptions.ClientError as e:
+            self._refresh_boto_session()
             log.error(
                 {"status": "ERROR", "message": f"Error uploading to S3 Bucket: {e}"}
             )
@@ -387,7 +393,10 @@ class FileSystemHandler(FileSystemEventHandler):
 
         try:
             if self.allow_delete:
-                self._refresh_boto_session()
+                if (
+                    time.time() - self.last_refresh_time >= 900
+                ):  # 900 seconds = 15 minutes
+                    self._refresh_boto_session()
                 self.s3_client.delete_object(Bucket=bucket_name, Key=file_key)
 
                 log.info(
@@ -724,53 +733,11 @@ class FileSystemHandler(FileSystemEventHandler):
                 "Since allow_delete is set to False, the test file will not be deleted from S3, please delete it manually"
             )
 
-    def init_db(self):
-        conn = sqlite3.connect("fswatcher.db")
-        return conn
+    def process_files(self, new_files, old_files):
+        deleted_files = old_files - new_files
 
-    def update_files_info(self, conn, cur, file_info):
-        cur.execute(
-            "REPLACE INTO files (file_path, modified_time) VALUES (?, ?)",
-            (file_info["file_path"], file_info["modified_time"]),
-        )
-        conn.commit()
+        new_files = new_files - old_files
 
-    def delete_file_info(self, conn, cur, file_path):
-        cur.execute("DELETE FROM files WHERE file_path=?", (file_path,))
-        conn.commit()
-
-    def get_files_info(self, cur):
-        cur.execute("SELECT file_path, modified_time FROM files")
-        return {row[0]: row[1] for row in cur.fetchall()}
-
-    def check_for_changes(self, conn, cur, current_files_info):
-        new_files = []
-        deleted_files = []
-        previous_files_info = self.get_files_info(cur)
-
-        for file, mtime in current_files_info.items():
-            if file not in previous_files_info or mtime > previous_files_info[file]:
-                new_files.append(file)
-                self.update_files_info(
-                    conn, cur, {"file_path": file, "modified_time": mtime}
-                )
-
-        for file in previous_files_info:
-            if file not in current_files_info:
-                deleted_files.append(file)
-                self.delete_file_info(conn, cur, file)
-
-        conn.commit()  # Commit the changes after all operations are complete
-        return new_files, deleted_files
-
-    def process_files(self, conn, cur, all_files, s3=False):
-        if s3:
-            # Compatible modification time for S3 in float
-            datetime_now = datetime.now().timestamp()
-            current_files_info = {file_path: datetime_now for file_path in all_files}
-        else:
-            current_files_info = {file_path: mtime for file_path, mtime in all_files}
-        new_files, deleted_files = self.check_for_changes(conn, cur, current_files_info)
         return new_files, deleted_files
 
     def check_path_exists(self, path):
@@ -779,48 +746,46 @@ class FileSystemHandler(FileSystemEventHandler):
             return False
         return True
 
-    def walk_directory(self, path, excluded_files=None, excluded_exts=None):
+    def walk_directory_find(
+        self, path, excluded_files=None, excluded_exts=None, within_timestamp=None
+    ):
         all_files = []
-        for root, _, files in os.walk(path):
-            for file in files:
-                file_path = os.path.join(root, file)
-                if (excluded_files and file_path in excluded_files) or (
-                    excluded_exts and os.path.splitext(file)[1] in excluded_exts
-                ):
-                    continue
-                try:
-                    file_mtime = os.path.getmtime(file_path)
-                    all_files.append((file_path, file_mtime))
-                except FileNotFoundError:
-                    log.info(f"File {file_path} not found")
+        find_command = ["find", path, "-type", "f", "-not", "-path", "'*/\.*'"]
+        if within_timestamp:
+            find_command += [
+                "-newermt",
+                within_timestamp,
+            ]
+        result = subprocess.run(find_command, stdout=subprocess.PIPE)
+        output_lines = result.stdout.decode().splitlines()
 
-        return all_files
+        for file_path in output_lines:
+            if (excluded_files and file_path in excluded_files) or (
+                excluded_exts and os.path.splitext(file_path)[1] in excluded_exts
+            ):
+                continue
+
+            try:
+                all_files.append((file_path))
+            except FileNotFoundError:
+                log.info(f"File {file_path} not found")
+
+        return set(all_files)
 
     def fallback_directory_watcher(self):
         path = "/watch"
-        check_interval = 5
 
-        # Create the table if it doesn't exist
-        conn = self.init_db()
-        cur = conn.cursor()
-        cur.execute(
-            """CREATE TABLE IF NOT EXISTS files (
-                        file_path TEXT PRIMARY KEY,
-                        modified_time REAL)"""
-        )
-        conn.commit()
+        last_run_timestamp_str = None
 
         # Initialize excluded_files and excluded_exts as empty lists
         excluded_files = []
         excluded_exts = []
         if self.check_with_s3:
             log.info("Checking S3 bucket for existing files...")
-            s3_keys = self._get_s3_keys(self.bucket_name)
+            s3_set = set(self._get_s3_keys(self.bucket_name))
             log.info(
-                f"Found {len(s3_keys)} files in S3 bucket. Adding to db of existing files..."
+                f"Found {len(s3_set)} files in S3 bucket. Adding to db of existing files..."
             )
-            self.process_files(conn, cur, s3_keys, True)
-
         log.info("Starting directory watcher...")
         if not self.check_path_exists(path):
             log.info("Path does not exist, exiting...")
@@ -828,35 +793,67 @@ class FileSystemHandler(FileSystemEventHandler):
         else:
             log.info(f"Monitoring path: {path}")
 
+        log.info("Get initial Files")
+        start = time.time()
+
+        # Get list of all files in directory
+        all_files = self.walk_directory_find(
+            path, excluded_files=excluded_files, excluded_exts=excluded_exts
+        )
+
+        if self.check_with_s3:
+            new_files, deleted_files = self.process_files(all_files, s3_set)
+        else:
+            new_files, deleted_files = self.process_files(all_files, set())
+
+        deleted_files = []
+
+        self._dispatch_events(list(new_files), deleted_files)
+        log.info(f"New files: {len(new_files)}")
+        log.info(f"Deleted files: {len(deleted_files)}")
+
+        end = time.time()
+        log.info(
+            f"Time taken to walk directory: {end - start} seconds, files: {len(all_files)}"
+        )
+        log.info("Get initial Files - Done")
+        log.info("\nStarting loop...")
+
+        # Loop starts
         while True:
-            time.sleep(
-                check_interval
-            )  # Wait for 60 seconds before checking for new files again
-            start = time.time()
+            if last_run_timestamp_str:
+                # Get list of all files in directory
+                modified_files = self.walk_directory_find(
+                    path,
+                    excluded_files=excluded_files,
+                    excluded_exts=excluded_exts,
+                    within_timestamp=last_run_timestamp_str,
+                )
+            else:
+                modified_files = set()
+
             # Get list of all files in directory
-            all_files = self.walk_directory(
-                path, excluded_files=excluded_files, excluded_exts=excluded_exts
+            files = self.walk_directory_find(
+                path,
+                excluded_files=excluded_files,
+                excluded_exts=excluded_exts,
             )
-            end = time.time()
-            # log.info(f"Time taken to walk directory: {end - start} seconds")
+            new_files, deleted_files = self.process_files(files, all_files)
 
-            start = time.time()
-            # log.info("Processing files...")
-            # Check for new, updated, and deleted files
-            new_files, deleted_files = self.process_files(conn, cur, all_files)
-            end = time.time()
-            # log.info(f"Time taken to process files: {end - start} seconds")
-            # log.info(f"New files: {len(new_files)}")
-            # log.info(f"Deleted files: {len(deleted_files)}")
-            # Size in megabytes of db
-            # log.info(f"DB size: {os.path.getsize('fswatcher.db') / 1000000} MB")
+            # Add modified files to new_files set
+            new_files = new_files.union(modified_files)
+            timestamp = int(time.time())
+            last_run_timestamp_str = time.strftime(
+                "%Y-%m-%dT%H:%M:%S", time.localtime(timestamp)
+            )
+            self._dispatch_events(list(new_files), deleted_files)
+            # Remove deleted files from all_files
+            all_files = all_files - deleted_files
+            # Add new files to all_files
+            all_files = all_files.union(new_files)
 
-            start = time.time()
-            # Dispatch events
-            # log.info("Dispatching events...")
-            self._dispatch_events(new_files, deleted_files)
-            end = time.time()
-            # log.info(f"Time taken to dispatch events: {end - start} seconds")
+            # Sleep for 5 seconds
+            time.sleep(5)
 
     def _refresh_boto_session(self):
         config = self.config
@@ -877,6 +874,7 @@ class FileSystemHandler(FileSystemEventHandler):
                 max_concurrency=self.concurrency_limit,
             )
             self.s3t = S3Transfer(self.s3_client, transfer_config)
+            self.last_refresh_time = time.time()
         except botocore.exceptions.ClientError as e:
             error_code = int(e.response["Error"]["Code"])
             if error_code == 404:
