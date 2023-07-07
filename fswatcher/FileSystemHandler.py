@@ -12,20 +12,19 @@ import subprocess
 import boto3
 import botocore
 from boto3.s3.transfer import TransferConfig, S3Transfer
-from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+from fswatcher import log, is_file_manifest, generate_file_pipeline_message, get_message_ts, get_slack_client, send_slack_notification, timestream_log
 from fswatcher.FileSystemHandlerEvent import FileSystemHandlerEvent
 from fswatcher.FileSystemHandlerConfig import FileSystemHandlerConfig
 from watchdog.events import (
     FileSystemEvent,
+    FileOpenedEvent,
     FileClosedEvent,
     FileSystemEventHandler,
     FileMovedEvent,
     FileDeletedEvent,
 )
-from typing import List
-from fswatcher import log
-
+from typing import List, Optional, Union, Dict, Any, Tuple
 
 class FileSystemHandler(FileSystemEventHandler):
     """
@@ -60,10 +59,10 @@ class FileSystemHandler(FileSystemEventHandler):
             # Initialize Boto3 Session
             self.boto3_session = (
                 boto3.session.Session(
-                    profile_name=config.profile, region_name=os.getenv("AWS_REGION")
+                    profile_name=config.profile, region_name=config.aws_region
                 )
                 if config.profile != ""
-                else boto3.session.Session(region_name=os.getenv("AWS_REGION"))
+                else boto3.session.Session(region_name=config.aws_region)
             )
 
             # Initialize S3 Transfer Manager with concurrency limit
@@ -101,16 +100,17 @@ class FileSystemHandler(FileSystemEventHandler):
         self.timestream_table = config.timestream_table
 
         # Check s3
-        if os.getenv("CHECK_S3") == "true":
+        if config.check_s3 == True:
             self.check_with_s3 = True
         else:
             self.check_with_s3 = False
-
+        log.info(config.slack_channel)
+        log.info(config.slack_token)
         # Initialize the slack client
         if config.slack_token is not None:
             try:
                 # Initialize the slack client
-                self.slack_client = WebClient(token=config.slack_token)
+                self.slack_client = get_slack_client(slack_token=config.slack_token)
 
                 # Initialize the slack channel
                 self.slack_channel = config.slack_channel
@@ -138,7 +138,7 @@ class FileSystemHandler(FileSystemEventHandler):
         # Path to watch
         self.path = config.path
 
-        if os.getenv("TEST_IAM_POLICY") == "true":
+        if config.test_iam_policy == True:
             log.info("Performing Push/Remove Test Run")
             self._test_iam_policy()
 
@@ -169,7 +169,11 @@ class FileSystemHandler(FileSystemEventHandler):
         # Skip closed events
         if isinstance(event, FileClosedEvent):
             return None
-
+        
+        # Skip closed events
+        if isinstance(event, FileOpenedEvent):
+            return None
+        
         # Skip if directory
         if event.is_directory:
             return None
@@ -187,30 +191,12 @@ class FileSystemHandler(FileSystemEventHandler):
 
         return file_system_event
 
+    
     def _handle_event(self, event: FileSystemHandlerEvent) -> None:
         """
         Function to handle file events and upload to S3
         """
         try:
-            # Send Slack Notification about the event
-            if self.slack_client is not None:
-                if event.action_type == "CREATE":
-                    slack_message = f"FSWatcher: New file in watch directory - ({event.get_parsed_path()}) :file_folder:"
-                elif event.action_type == "UPDATE":
-                    slack_message = f"FSWatcher: File modified in watch directory - ({event.get_parsed_path()}) :file_folder:"
-                elif event.action_type == "PUT":
-                    slack_message = f"FSWatcher: File moved in watch directory - ({event.get_parsed_path()}) :file_folder:"
-                elif event.action_type == "DELETE":
-                    slack_message = f"FSWatcher: File deleted from watch directory - ({event.get_parsed_path()}) :file_folder:"
-                else:
-                    slack_message = f"FSWatcher: Unknown file event in watch directory - ({event.get_parsed_path()}) :file_folder:"
-
-                self._send_slack_notification(
-                    slack_client=self.slack_client,
-                    slack_channel=self.slack_channel,
-                    slack_message=slack_message,
-                )
-
             # Get the log message
             log_message = event.get_log_message()
 
@@ -218,6 +204,14 @@ class FileSystemHandler(FileSystemEventHandler):
             log.info(log_message)
 
             if event.action_type != "DELETE":
+                # Send Slack Notification about the event
+                if self.slack_client is not None:
+                    slack_message = generate_file_pipeline_message(event.get_path())
+                    send_slack_notification(
+                        slack_client=self.slack_client,
+                        slack_channel=self.slack_channel,
+                        slack_message=slack_message,
+                    )
                 # Generate Object Tags String
                 tags = self._generate_object_tags(
                     event=event,
@@ -233,12 +227,28 @@ class FileSystemHandler(FileSystemEventHandler):
 
                 # Send Slack Notification about the event
                 if self.slack_client is not None:
-                    slack_message = f"FSWatcher: File successfully uploaded to {event.bucket_name} - ({event.get_parsed_path()}) :file_folder:"
-                    self._send_slack_notification(
-                        slack_client=self.slack_client,
-                        slack_channel=self.slack_channel,
-                        slack_message=slack_message,
-                    )
+                    if not is_file_manifest(event.get_path()):
+                        slack_message = generate_file_pipeline_message(event.get_path())
+                        # Get ts of the slack message
+                        ts = get_message_ts(
+                            slack_client=self.slack_client,
+                            slack_channel=self.slack_channel,
+                            text=slack_message,  # Pass the message_ts instead of slack_message
+                        )
+                        
+                        action_type = "upload"
+                        slack_message = generate_file_pipeline_message(event.get_path(), alert_type=action_type)
+                        
+                        
+                        # Send Slack Notification about the event within thread
+                        send_slack_notification(
+                            slack_client=self.slack_client,
+                            slack_channel=self.slack_channel,
+                            slack_message=slack_message,
+                            alert_type=action_type,
+                            thread_ts=ts,
+                        )
+                    
 
             elif event.action_type == "DELETE" and self.allow_delete:
                 # Delete from S3 Bucket if allowed
@@ -247,9 +257,10 @@ class FileSystemHandler(FileSystemEventHandler):
                     file_key=event.get_parsed_path(),
                 )
 
+
             # Log to Timestream
             if self.timestream_db and self.timestream_table:
-                self._log(
+                timestream_log(
                     boto3_session=self.boto3_session,
                     action_type=event.action_type,
                     file_key=event.get_path(),
@@ -371,12 +382,13 @@ class FileSystemHandler(FileSystemEventHandler):
             log.error(
                 {"status": "ERROR", "message": f"Error uploading to S3 Bucket: {e}"}
             )
-            self._send_slack_notification(
+            send_slack_notification(
                 slack_client=self.slack_client,
                 slack_channel=self.slack_channel,
                 slack_message=f"FSWatcher: Error uploading file to {bucket_name} - ({file_key}) :file_folder:",
                 alert_type="error",
             )
+            
 
     def _delete_from_s3_bucket(self, bucket_name, file_key):
         """
@@ -407,115 +419,6 @@ class FileSystemHandler(FileSystemEventHandler):
                 {"status": "ERROR", "message": f"Error deleting from S3 Bucket: {e}"}
             )
 
-    @staticmethod
-    def _send_slack_notification(
-        slack_client,
-        slack_channel: str,
-        slack_message: str,
-        alert_type: str = "success",
-    ) -> None:
-        """
-        Function to send a Slack Notification
-        """
-        log.debug(f"Sending Slack Notification to {slack_channel}")
-        try:
-            color = {
-                "success": "#3498db",
-                "error": "#ff0000",
-            }
-            ct = datetime.now()
-            ts = ct.strftime("%y-%m-%d %H:%M:%S")
-            slack_client.chat_postMessage(
-                channel=slack_channel,
-                text=f"{ts} - {slack_message}",
-                attachments=[
-                    {
-                        "color": color[alert_type],
-                        "blocks": [
-                            {
-                                "type": "section",
-                                "text": {
-                                    "type": "plain_text",
-                                    "text": f"{ts} - {slack_message}",
-                                },
-                            }
-                        ],
-                    }
-                ],
-            )
-
-        except SlackApiError as e:
-            log.error(
-                {"status": "ERROR", "message": f"Error sending Slack Notification: {e}"}
-            )
-
-    @staticmethod
-    def _log(
-        boto3_session,
-        action_type,
-        file_key,
-        new_file_key=None,
-        source_bucket=None,
-        destination_bucket=None,
-        timestream_db=None,
-        timestream_table=None,
-    ):
-        """
-        Function to Log to Timestream
-        """
-        log.debug(f"Object ({new_file_key}) - Logging Event to Timestream")
-        CURRENT_TIME = str(int(time.time() * 1000))
-        try:
-            # Initialize Timestream Client
-            timestream = boto3_session.client("timestream-write")
-
-            if not source_bucket and not destination_bucket:
-                raise ValueError("A Source or Destination Buckets is required")
-
-            # Write to Timestream
-            timestream.write_records(
-                DatabaseName=timestream_db if timestream_db else "sdc_aws_logs",
-                TableName=timestream_table
-                if timestream_table
-                else "sdc_aws_s3_bucket_log_table",
-                Records=[
-                    {
-                        "Time": CURRENT_TIME,
-                        "Dimensions": [
-                            {"Name": "action_type", "Value": action_type},
-                            {
-                                "Name": "source_bucket",
-                                "Value": source_bucket or "N/A",
-                            },
-                            {
-                                "Name": "destination_bucket",
-                                "Value": destination_bucket or "N/A",
-                            },
-                            {"Name": "file_key", "Value": file_key},
-                            {
-                                "Name": "new_file_key",
-                                "Value": new_file_key or "N/A",
-                            },
-                            {
-                                "Name": "current file count",
-                                "Value": "N/A",
-                            },
-                        ],
-                        "MeasureName": "timestamp",
-                        "MeasureValue": str(datetime.utcnow().timestamp()),
-                        "MeasureValueType": "DOUBLE",
-                    },
-                ],
-            )
-
-            log.debug(
-                (f"Object ({new_file_key}) - Event Successfully Logged to Timestream")
-            )
-
-        except botocore.exceptions.ClientError as e:
-            log.error(
-                {"status": "ERROR", "message": f"Error logging to Timestream: {e}"}
-            )
 
     # Recursively get all file in the specified directory as a list with optional date filter (datetime) also print out how long it took to get the files and the number of files
     def _get_files(self, path, date_filter=None):
@@ -576,7 +479,7 @@ class FileSystemHandler(FileSystemEventHandler):
                     tags=self.tags,
                 )
                 self._refresh_boto_session()
-                self._log(
+                timestream_log(
                     boto3_session=self.boto3_session,
                     action_type="PUT",
                     file_key=file_key,
@@ -860,10 +763,10 @@ class FileSystemHandler(FileSystemEventHandler):
         try:
             self.boto3_session = (
                 boto3.session.Session(
-                    profile_name=config.profile, region_name=os.getenv("AWS_REGION")
+                    profile_name=config.profile, region_name=self.config.aws_region
                 )
                 if config.profile != ""
-                else boto3.session.Session(region_name=os.getenv("AWS_REGION"))
+                else boto3.session.Session(region_name=self.config.aws_region)
             )
             botocore_config = botocore.config.Config(
                 max_pool_connections=self.concurrency_limit

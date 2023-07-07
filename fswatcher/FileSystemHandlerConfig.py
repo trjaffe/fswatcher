@@ -4,8 +4,8 @@ File System Handler Configuration Module
 
 from argparse import ArgumentParser
 
-from fswatcher import log
-
+import logging
+log = logging.getLogger(__name__)
 
 class FileSystemHandlerConfig:
     """
@@ -25,6 +25,12 @@ class FileSystemHandlerConfig:
         slack_channel: str = "",
         backtrack: bool = False,
         backtrack_date: str = "",
+        use_fallback: bool = False,
+        file_logging: bool = False,
+        boto3_logging: bool = False,
+        test_iam_policy: bool = False,
+        check_s3: bool = False,
+        aws_region: str = "us-east-1",
     ) -> None:
         """
         Class Constructor
@@ -41,6 +47,12 @@ class FileSystemHandlerConfig:
         self.slack_channel = slack_channel
         self.backtrack = backtrack
         self.backtrack_date = backtrack_date
+        self.use_fallback = use_fallback
+        self.file_logging = file_logging
+        self.boto3_logging = boto3_logging
+        self.test_iam_policy = test_iam_policy
+        self.check_s3 = check_s3
+        self.aws_region = aws_region
 
 
 def create_argparse() -> ArgumentParser:
@@ -115,6 +127,53 @@ def create_argparse() -> ArgumentParser:
         help="Channel for Slack to send notifications",
     )
 
+    # Add Argument to parse the fallback flag
+    parser.add_argument(
+        "-f",
+        "--use_fallback",
+        action="store_true",
+        help="Use Fallback Flag for the File System Watcher",
+    )
+
+    # Add Argument to parse the file logging flag
+    parser.add_argument(
+        "-fl",
+        "--file_logging",
+        action="store_true",
+        help="File Logging Flag for the File System Watcher",
+    )
+
+    # Add Argument to parse the boto3 logging flag
+    parser.add_argument(
+        "-bl",
+        "--boto3_logging",
+        action="store_true",
+        help="Boto3 Logging Flag for the File System Watcher",
+    )
+
+    # Add Argument to parse the test IAM policy flag
+    parser.add_argument(
+        "-tp",
+        "--test_iam_policy",
+        action="store_true",
+        help="Test IAM Policy Flag for the File System Watcher",
+    )
+
+    # Add Argument to parse the check S3 bucket flag
+    parser.add_argument(
+        "-cs",
+        "--check_s3",
+        action="store_true",
+        help="Check S3 Bucket Flag for the File System Watcher",
+    )
+
+    # Add Argument to parse the AWS region
+    parser.add_argument(
+        "-ar",
+        "--aws_region",
+        help="AWS Region for the File System Watcher",
+    )
+
     # Return the Argument Parser
     return parser
 
@@ -144,6 +203,12 @@ def parse_args(parser: ArgumentParser) -> dict:
         "slack_channel": args.slack_channel,
         "backtrack": args.backtrack,
         "backtrack_date": args.backtrack_date,
+        "use_fallback": args.use_fallback,
+        "file_logging": args.file_logging,
+        "boto3_logging": args.boto3_logging,
+        "test_iam_policy": args.test_iam_policy,
+        "check_s3": args.check_s3,
+        "aws_region": args.aws_region,
     }
 
     # Return the arguments dictionary

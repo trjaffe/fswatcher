@@ -67,6 +67,15 @@ unset SDC_AWS_SLACK_CHANNEL
 unset SDC_AWS_ALLOW_DELETE
 unset SDC_AWS_BACKTRACK
 unset SDC_AWS_BACKTRACK_DATE
+unset SDC_AWS_AWS_REGION
+unset SDC_AWS_FILE_LOGGING
+unset SDC_AWS_BOTO3_LOGGING
+unset SDC_AWS_TEST_IAM_POLICY
+unset SDC_AWS_BACKTRACK
+unset SDC_AWS_BACKTRACK_DATE
+unset SDC_AWS_USE_FALLBACK
+unset SDC_AWS_CHECK_S3
+unset SDC_AWS_PROFILE
 
 # Docker environment variables
 SDC_AWS_S3_BUCKET="-b $S3_BUCKET_NAME"
@@ -123,14 +132,54 @@ else
     SDC_AWS_BACKTRACK_DATE=""
 fi
 
-# If File Logging is true, then add it to the environment variables else make it empty
+# If FILE_LOGGING is true, then add it to the environment variables else make it empty
 if [ "$FILE_LOGGING" = true ]; then
-    FILE_LOGGING=true
+    SDC_AWS_FILE_LOGGING="-fl"
+else
+    SDC_AWS_FILE_LOGGING=""
+fi
+
+# If BOTO3_LOGGING is true, then add it to the environment variables else make it empty
+if [ "$BOTO3_LOGGING" = true ]; then
+    SDC_AWS_BOTO3_LOGGING="-bl"
+else
+    SDC_AWS_BOTO3_LOGGING=""
+fi
+
+# If TEST_IAM_POLICY is true, then add it to the environment variables else make it empty
+if [ "$TEST_IAM_POLICY" = true ]; then
+    SDC_AWS_TEST_IAM_POLICY="-tp"
+else
+    SDC_AWS_TEST_IAM_POLICY=""
 fi
 
 # If USE_FALLBACK is true, then add it to the environment variables else make it empty
 if [ "$USE_FALLBACK" = true ]; then
-    USE_FALLBACK=true
+    SDC_AWS_USE_FALLBACK="-f"
+else
+    SDC_AWS_USE_FALLBACK=""
+fi
+
+# If CHECK_S3 is true, then add it to the environment variables else make it empty
+if [ "$CHECK_S3" = true ]; then
+    SDC_AWS_CHECK_S3="-cs"
+else
+    SDC_AWS_CHECK_S3=""
+fi
+
+
+# If AWS_REGION is not "", then add it to the environment variables else make it empty
+if [ "$AWS_REGION" != "" ]; then
+    SDC_AWS_AWS_REGION="-ar $AWS_REGION"
+else
+    SDC_AWS_AWS_REGION="-ar us-east-1"
+fi
+
+# If PROFILE is not "", then add it to the environment variables else make it empty
+if [ "$PROFILE" != "" ]; then
+    SDC_AWS_PROFILE="-p '$PROFILE'"
+else
+    SDC_AWS_PROFILE=""
 fi
 
 # Print all the environment variables
@@ -142,17 +191,20 @@ echo "SDC_AWS_TIMESTREAM_TABLE: $SDC_AWS_TIMESTREAM_TABLE"
 echo "SDC_AWS_SLACK_TOKEN: $SDC_AWS_SLACK_TOKEN"
 echo "SDC_AWS_SLACK_CHANNEL: $SDC_AWS_SLACK_CHANNEL"
 echo "SDC_AWS_ALLOW_DELETE: $SDC_AWS_ALLOW_DELETE"
-echo "AWS_REGION: $AWS_REGION"
-echo "FILE_LOGGING: $FILE_LOGGING"
-echo "BOTO3_LOGGING: $BOTO3_LOGGING"
-echo "TEST_IAM_POLICY: $TEST_IAM_POLICY"
-echo "BACKTRACK: $BACKTRACK"
-echo "BACKTRACK_DATE: $BACKTRACK_DATE"
-echo "USE_FALLBACK: $USE_FALLBACK"
+echo "SDC_AWS_AWS_REGION: $SDC_AWS_AWS_REGION"
+echo "SDC_AWS_FILE_LOGGING: $SDC_AWS_FILE_LOGGING"
+echo "SDC_AWS_BOTO3_LOGGING: $SDC_AWS_BOTO3_LOGGING"
+echo "SDC_AWS_TEST_IAM_POLICY: $SDC_AWS_TEST_IAM_POLICY"
+echo "SDC_AWS_BACKTRACK: $SDC_AWS_BACKTRACK"
+echo "SDC_AWS_BACKTRACK_DATE: $SDC_AWS_BACKTRACK_DATE"
+echo "SDC_AWS_USE_FALLBACK: $SDC_AWS_USE_FALLBACK"
+echo "SDC_AWS_CHECK_S3: $SDC_AWS_CHECK_S3"
+echo "SDC_AWS_PROFILE: $SDC_AWS_PROFILE"
 
 # Run the docker container in detached mode
 docker run -d \
     --name $CONTAINER_NAME \
+    --restart=always \
     -e SDC_AWS_S3_BUCKET="$SDC_AWS_S3_BUCKET" \
     -e SDC_AWS_CONCURRENCY_LIMIT="$SDC_AWS_CONCURRENCY_LIMIT" \
     -e SDC_AWS_TIMESTREAM_DB="$SDC_AWS_TIMESTREAM_DB" \
@@ -162,15 +214,18 @@ docker run -d \
     -e SDC_AWS_ALLOW_DELETE="$SDC_AWS_ALLOW_DELETE" \
     -e SDC_AWS_BACKTRACK="$SDC_AWS_BACKTRACK" \
     -e SDC_AWS_BACKTRACK_DATE="$SDC_AWS_BACKTRACK_DATE" \
-    -e AWS_REGION="$AWS_REGION" \
-    -e FILE_LOGGING="$FILE_LOGGING" \
-    -e CHECK_S3="$CHECK_S3" \
-    -e BOTO3_LOGGING="$BOTO3_LOGGING" \
-    -e TEST_IAM_POLICY="$TEST_IAM_POLICY" \
-    -e USE_FALLBACK="$USE_FALLBACK" \
+    -e SDC_AWS_AWS_REGION="$SDC_AWS_AWS_REGION" \
+    -e SDC_AWS_FILE_LOGGING="$SDC_AWS_FILE_LOGGING" \
+    -e SDC_AWS_CHECK_S3="$SDC_AWS_CHECK_S3" \
+    -e SDC_AWS_BOTO3_LOGGING="$SDC_AWS_BOTO3_LOGGING" \
+    -e SDC_AWS_TEST_IAM_POLICY="$SDC_AWS_TEST_IAM_POLICY" \
+    -e SDC_AWS_USE_FALLBACK="$SDC_AWS_USE_FALLBACK" \
+    -e SDC_AWS_PROFILE="$SDC_AWS_PROFILE" \
+    -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" \
     -v /etc/passwd:/etc/passwd \
     -v $WATCH_DIR:/watch \
-    -v ${HOME}/.aws/credentials:/root/.aws/credentials:ro \
+    -v $HOME/.aws/credentials:/root/.aws/credentials:ro \
+    -v $LOG_DIR:/fswatcher/logs \
     $IMAGE_NAME
 
 # Print the docker logs
