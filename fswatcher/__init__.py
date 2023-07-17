@@ -39,6 +39,7 @@ if config.boto3_logging == True:
     boto3_log = logging.getLogger("botocore")
     boto3_log.setLevel(logging.DEBUG)
 
+
 def is_file_manifest(file_name: str) -> bool:
     """
     Check if a file is a manifest file
@@ -55,7 +56,9 @@ def is_file_manifest(file_name: str) -> bool:
     return base_name.startswith("file_manifest")
 
 
-def generate_file_pipeline_message(file_path: str, alert_type: Optional[str] = None) -> str:
+def generate_file_pipeline_message(
+    file_path: str, alert_type: Optional[str] = None
+) -> str:
     """
     Function to generate file pipeline message
     """
@@ -69,20 +72,21 @@ def generate_file_pipeline_message(file_path: str, alert_type: Optional[str] = N
             "error": f"File Upload Failed - ( _{parsed_file_path}_ )",
         }
         slack_message = f"Science File - ( _{parsed_file_path}_ )"
-        
+
         if is_file_manifest(file_path):
             slack_message = f"Manifest File - ( _{parsed_file_path}_ )"
-            with open(file_path, 'r') as file:
+            with open(file_path, "r") as file:
                 secondary_message = file.read()
-                
+
             return (slack_message, secondary_message)
-        
+
         if alert_type:
             slack_message = alert[alert_type]
         return slack_message
     else:
-        slack_message = 'File Deleted - ( _{parsed_file_path}_ )'
-    
+        slack_message = "File Deleted - ( _{parsed_file_path}_ )"
+
+
 def get_slack_client(slack_token: str) -> WebClient:
     """
     Initialize a Slack client using the provided token.
@@ -111,7 +115,6 @@ def get_slack_client(slack_token: str) -> WebClient:
     return slack_client
 
 
-
 def send_slack_notification(
     slack_client: WebClient,
     slack_channel: str,
@@ -136,41 +139,45 @@ def send_slack_notification(
     }
     ct = datetime.now()
     ts = ct.strftime("%y-%m-%d %H:%M:%S")
-    attachments=[]
+    attachments = []
     # Check if slack_message is a tuple
     if isinstance(slack_message, tuple):
         text = slack_message[0]
-        attachments = [{
-            "color": color["purple"],
-            "blocks": [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"{slack_message[1]}",
-                    },
-                }
-            ],
-            "fallback": f"{slack_message[1]}",
-        }]
-        pretext = slack_message[0]
-    else:
-        text = slack_message
-        pretext = slack_message
-        if alert_type:
-            attachments = [{
-                "color": color[alert_type],
+        attachments = [
+            {
+                "color": color["purple"],
                 "blocks": [
                     {
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"`{ts}` - {slack_message}",
+                            "text": f"{slack_message[1]}",
                         },
                     }
                 ],
-            }]
-            text = None
+                "fallback": f"{slack_message[1]}",
+            }
+        ]
+        pretext = slack_message[0]
+    else:
+        text = slack_message
+        pretext = slack_message
+        if alert_type:
+            attachments = [
+                {
+                    "color": color[alert_type],
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"{slack_message}",
+                            },
+                        }
+                    ],
+                }
+            ]
+            text = f'`{ts}` -'
 
     for i in range(slack_max_retries):
         try:
@@ -180,7 +187,6 @@ def send_slack_notification(
                 pretext=pretext,
                 attachments=attachments,
                 thread_ts=thread_ts,  # Include the thread_ts parameter
-                
             )
 
             log.debug(f"Slack Notification Successfully Sent to {slack_channel}")
@@ -188,7 +194,9 @@ def send_slack_notification(
             return True
 
         except SlackApiError as e:
-            if i < slack_max_retries - 1:  # If it's not the last attempt, wait and try again
+            if (
+                i < slack_max_retries - 1
+            ):  # If it's not the last attempt, wait and try again
                 log.warning(
                     f"Error sending Slack Notification (attempt {i + 1}): {e}."
                     f"Retrying in {slack_retry_delay} seconds..."
@@ -202,15 +210,19 @@ def send_slack_notification(
                     }
                 )
                 raise e
-def get_message_ts(slack_client: WebClient, slack_channel: str, text: str) -> Optional[str]:
+
+
+def get_message_ts(
+    slack_client: WebClient, slack_channel: str, text: str
+) -> Optional[str]:
     try:
         response = slack_client.conversations_history(channel=slack_channel)
         messages = response["messages"]
-        
+
         for message in messages:
             if "text" in message and message["text"] == text:
                 return message["ts"]
-        
+
         return None
     except SlackApiError as e:
         # Handle the exception according to your needs
@@ -281,6 +293,4 @@ def timestream_log(
         )
 
     except botocore.exceptions.ClientError as e:
-        log.error(
-            {"status": "ERROR", "message": f"Error logging to Timestream: {e}"}
-        )
+        log.error({"status": "ERROR", "message": f"Error logging to Timestream: {e}"})

@@ -39,9 +39,7 @@ def main() -> None:
             )
             log.info("Backtracking complete")
             config.backtrack = False
-        log.info(
-            f"Watching for file events with INotify Observer in: {config.path}"
-        )
+        log.info(f"Watching for file events with INotify Observer in: {config.path}")
 
     except OSError:
         # If inotify fails, use the polling observer

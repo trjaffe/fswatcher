@@ -13,7 +13,15 @@ import boto3
 import botocore
 from boto3.s3.transfer import TransferConfig, S3Transfer
 from slack_sdk.errors import SlackApiError
-from fswatcher import log, is_file_manifest, generate_file_pipeline_message, get_message_ts, get_slack_client, send_slack_notification, timestream_log
+from fswatcher import (
+    log,
+    is_file_manifest,
+    generate_file_pipeline_message,
+    get_message_ts,
+    get_slack_client,
+    send_slack_notification,
+    timestream_log,
+)
 from fswatcher.FileSystemHandlerEvent import FileSystemHandlerEvent
 from fswatcher.FileSystemHandlerConfig import FileSystemHandlerConfig
 from watchdog.events import (
@@ -25,6 +33,7 @@ from watchdog.events import (
     FileDeletedEvent,
 )
 from typing import List, Optional, Union, Dict, Any, Tuple
+
 
 class FileSystemHandler(FileSystemEventHandler):
     """
@@ -104,8 +113,7 @@ class FileSystemHandler(FileSystemEventHandler):
             self.check_with_s3 = True
         else:
             self.check_with_s3 = False
-        log.info(config.slack_channel)
-        log.info(config.slack_token)
+
         # Initialize the slack client
         if config.slack_token is not None:
             try:
@@ -169,11 +177,11 @@ class FileSystemHandler(FileSystemEventHandler):
         # Skip closed events
         if isinstance(event, FileClosedEvent):
             return None
-        
+
         # Skip closed events
         if isinstance(event, FileOpenedEvent):
             return None
-        
+
         # Skip if directory
         if event.is_directory:
             return None
@@ -191,7 +199,6 @@ class FileSystemHandler(FileSystemEventHandler):
 
         return file_system_event
 
-    
     def _handle_event(self, event: FileSystemHandlerEvent) -> None:
         """
         Function to handle file events and upload to S3
@@ -206,12 +213,16 @@ class FileSystemHandler(FileSystemEventHandler):
             if event.action_type != "DELETE":
                 # Send Slack Notification about the event
                 if self.slack_client is not None:
-                    slack_message = generate_file_pipeline_message(event.get_path())
-                    send_slack_notification(
-                        slack_client=self.slack_client,
-                        slack_channel=self.slack_channel,
-                        slack_message=slack_message,
-                    )
+                    try:
+                        slack_message = generate_file_pipeline_message(event.get_path())
+                        send_slack_notification(
+                            slack_client=self.slack_client,
+                            slack_channel=self.slack_channel,
+                            slack_message=slack_message,
+                        )
+                    except Exception as e:
+                        log.error(e)
+
                 # Generate Object Tags String
                 tags = self._generate_object_tags(
                     event=event,
@@ -227,28 +238,33 @@ class FileSystemHandler(FileSystemEventHandler):
 
                 # Send Slack Notification about the event
                 if self.slack_client is not None:
-                    if not is_file_manifest(event.get_path()):
-                        slack_message = generate_file_pipeline_message(event.get_path())
-                        # Get ts of the slack message
-                        ts = get_message_ts(
-                            slack_client=self.slack_client,
-                            slack_channel=self.slack_channel,
-                            text=slack_message,  # Pass the message_ts instead of slack_message
-                        )
-                        
-                        action_type = "upload"
-                        slack_message = generate_file_pipeline_message(event.get_path(), alert_type=action_type)
-                        
-                        
-                        # Send Slack Notification about the event within thread
-                        send_slack_notification(
-                            slack_client=self.slack_client,
-                            slack_channel=self.slack_channel,
-                            slack_message=slack_message,
-                            alert_type=action_type,
-                            thread_ts=ts,
-                        )
-                    
+                    try:
+                        if not is_file_manifest(event.get_path()):
+                            slack_message = generate_file_pipeline_message(
+                                event.get_path()
+                            )
+                            # Get ts of the slack message
+                            ts = get_message_ts(
+                                slack_client=self.slack_client,
+                                slack_channel=self.slack_channel,
+                                text=slack_message,  # Pass the message_ts instead of slack_message
+                            )
+
+                            action_type = "upload"
+                            slack_message = generate_file_pipeline_message(
+                                event.get_path(), alert_type=action_type
+                            )
+
+                            # Send Slack Notification about the event within thread
+                            send_slack_notification(
+                                slack_client=self.slack_client,
+                                slack_channel=self.slack_channel,
+                                slack_message=slack_message,
+                                alert_type=action_type,
+                                thread_ts=ts,
+                            )
+                    except Exception as e:
+                        log.error(e)
 
             elif event.action_type == "DELETE" and self.allow_delete:
                 # Delete from S3 Bucket if allowed
@@ -256,7 +272,6 @@ class FileSystemHandler(FileSystemEventHandler):
                     bucket_name=event.bucket_name,
                     file_key=event.get_parsed_path(),
                 )
-
 
             # Log to Timestream
             if self.timestream_db and self.timestream_table:
@@ -382,13 +397,15 @@ class FileSystemHandler(FileSystemEventHandler):
             log.error(
                 {"status": "ERROR", "message": f"Error uploading to S3 Bucket: {e}"}
             )
-            send_slack_notification(
-                slack_client=self.slack_client,
-                slack_channel=self.slack_channel,
-                slack_message=f"FSWatcher: Error uploading file to {bucket_name} - ({file_key}) :file_folder:",
-                alert_type="error",
-            )
-            
+            try:
+                send_slack_notification(
+                    slack_client=self.slack_client,
+                    slack_channel=self.slack_channel,
+                    slack_message=f"FSWatcher: Error uploading file to {bucket_name} - ({file_key}) :file_folder:",
+                    alert_type="error",
+                )
+            except Exception as e:
+                log.error(e)
 
     def _delete_from_s3_bucket(self, bucket_name, file_key):
         """
@@ -418,7 +435,6 @@ class FileSystemHandler(FileSystemEventHandler):
             log.error(
                 {"status": "ERROR", "message": f"Error deleting from S3 Bucket: {e}"}
             )
-
 
     # Recursively get all file in the specified directory as a list with optional date filter (datetime) also print out how long it took to get the files and the number of files
     def _get_files(self, path, date_filter=None):

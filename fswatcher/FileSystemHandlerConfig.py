@@ -5,7 +5,9 @@ File System Handler Configuration Module
 from argparse import ArgumentParser
 
 import logging
+
 log = logging.getLogger(__name__)
+
 
 class FileSystemHandlerConfig:
     """

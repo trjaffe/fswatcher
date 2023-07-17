@@ -226,6 +226,7 @@ docker run -d \
     -v $WATCH_DIR:/watch \
     -v $HOME/.aws/credentials:/root/.aws/credentials:ro \
     -v $LOG_DIR:/fswatcher/logs \
+    --network host \
     $IMAGE_NAME
 
 # Print the docker logs
