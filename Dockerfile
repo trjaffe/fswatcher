@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir --upgrade pip setuptools setuptools_scm && \
     rm -rf /root/.cache/pip
 
 # Install dependencies
-RUN pip install --no-cache-dir -r /fswatcher/requirements.txt && \
+RUN pip install --no-cache-dir --upgrade -r /fswatcher/requirements.txt && \
     # Clean up
     rm -rf /root/.cache/pip
 
