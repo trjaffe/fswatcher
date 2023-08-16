@@ -1,10 +1,10 @@
 #!/bin/bash -x
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
-if test -d "$SCRIPT_DIR/../venv";
-then
-    rm -rf "$SCRIPT_DIR/../venv"
-fi
+# if test -d "$SCRIPT_DIR/../venv";
+# then
+#     rm -rf "$SCRIPT_DIR/../venv"
+# fi
 
 pip install virtualenv
 virtualenv venv
@@ -216,7 +216,7 @@ fi
 
 # If PROFILE is not "", then add it to the environment variables else make it empty
 if [ "$PROFILE" != "" ]; then
-    SDC_AWS_PROFILE="-p '$PROFILE'"
+    SDC_AWS_PROFILE="-p $PROFILE"
 else
     SDC_AWS_PROFILE=""
 fi
