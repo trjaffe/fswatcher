@@ -6,13 +6,14 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 #     rm -rf "$SCRIPT_DIR/../venv"
 # fi
 
-pip install virtualenv
-virtualenv venv
-. $SCRIPT_DIR/../venv/bin/activate
-
-
-pip install -r ../requirements.txt
-pip install --no-cache-dir ../
+##  Only need to do this once.  
+#pip install virtualenv
+#virtualenv venv
+#. $SCRIPT_DIR/../venv/bin/activate
+##
+#
+#pip install -r ../requirements.txt
+#pip install --no-cache-dir ../
 
 
 
@@ -31,13 +32,14 @@ IMAGE_NAME=fswatcher
 # AWS configurations
 # ========================
 # S3 bucket name (Note:Support directories as well s3-bucket-name/directory)
-S3_BUCKET_NAME=dh-fornaxdev-public/Test/
+S3_BUCKET_NAME=nasa-heasarc/nicer/data/obs
+
 
 # AWS region (Used for Timestream Database)
 AWS_REGION="us-east-1"
 
 # Concurrency limit (Limit of concurrent uploads)
-CONCURRENCY_LIMIT=100
+CONCURRENCY_LIMIT=3
 
 # IAM Policy Test - when enabled runs a push/delete with a generated test file to ensure policy is set correctly
 TEST_IAM_POLICY=false
@@ -46,7 +48,7 @@ TEST_IAM_POLICY=false
 # Directory to watch
 # ========================
 # Filepath to the directory to be watched (Needs to be created/existing before running)
-WATCH_DIR=/home/phoenix/fswatcher/test
+WATCH_DIR=/FTP/nicer/data/obs
 
 # Get path of current working directory (where the script is located)
 SCRIPT_PATH=$(pwd)
